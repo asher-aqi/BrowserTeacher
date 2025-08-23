@@ -54,7 +54,7 @@ export default function Home() {
   };
 
   return (
-    <div className="font-sans min-h-screen">
+    <div className="font-sans min-h-screen bg-white">
       <LiveKitRoom
         token={token ?? undefined}
         serverUrl={serverUrl ?? undefined}
@@ -66,12 +66,15 @@ export default function Home() {
         <WindowManager
           left={
             <div className="h-full flex flex-col">
-              <div className="p-3 border-b font-semibold">Lesson Plan</div>
-              <div className="flex-1 overflow-auto p-3">
+              <div className="p-4 border-b border-gray-200 font-semibold text-gray-900 bg-gray-50">
+                <h2 className="text-lg">Lesson Plan</h2>
+              </div>
+              <div className="flex-1 overflow-auto p-4">
                 <LessonPlan plan={plan ?? null} />
               </div>
-              <div className="p-3 border-t">
-                <div className="text-xs text-gray-500">Voice</div>
+              <div className="p-4 border-t border-gray-200 bg-gray-50">
+                <div className="text-sm text-gray-600 mb-3 font-medium">Voice Controls</div>
+                <VoiceControlBar onStart={startVoice} isConnected={Boolean(token)} />
               </div>
             </div>
           }
@@ -85,15 +88,17 @@ export default function Home() {
                   className="w-full h-full"
                 />
               ) : (
-                <div className="w-full h-full grid place-items-center text-sm text-gray-500">
-                  Start voice to initialize the browser
+                <div className="w-full h-full grid place-items-center text-gray-500 bg-gray-50">
+                  <div className="text-center">
+                    <div className="text-4xl mb-4">🌐</div>
+                    <div className="text-lg font-medium mb-2">Browser Ready</div>
+                    <div className="text-sm">Start voice to initialize the browser session</div>
+                  </div>
                 </div>
               )}
             </div>
           }
         />
-
-        <VoiceControlBar onStart={startVoice} isConnected={Boolean(token)} />
       </LiveKitRoom>
     </div>
   );
