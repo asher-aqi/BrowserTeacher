@@ -28,7 +28,10 @@ export async function POST(req: NextRequest) {
       console.warn("[session.start] stop-all (REQUEST_RELEASE) pre-clean failed", (e as any)?.message || e);
     }
     // Types vary across SDK versions; use any to remain flexible during hackathon
-    const session: any = await (bb as any).sessions.create({ projectId: process.env.BROWSERBASE_PROJECT_ID });
+    const session: any = await (bb as any).sessions.create({
+      projectId: process.env.BROWSERBASE_PROJECT_ID,
+      keepAlive: true,
+    });
 
     // Some SDKs return only partial URLs on create; attempt a retrieve for full fields
     // Use official debug endpoint to get final inspector/live URLs
