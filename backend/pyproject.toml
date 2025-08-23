@@ -10,4 +10,5 @@ dependencies = [
     "hypercorn>=0.17.3",
     "pydantic-ai[ag-ui,logfire]>=0.7.4",
     "supabase>=2.18.1",
+    "vapi-python>=0.1.9",
 ]
