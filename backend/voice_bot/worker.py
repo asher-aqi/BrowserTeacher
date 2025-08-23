@@ -181,7 +181,7 @@ async def entrypoint(ctx: JobContext):
   use_pydantic = os.getenv("USE_PYDANTIC_LLM", "0").lower() in ("1", "true", "yes")
   if use_pydantic:
     llm_node = PydanticAgentLLM(
-      openai_model=os.getenv("LIVEKIT_DEFAULT_LLM", "openai:gpt-4o-mini"),
+      openai_model=os.getenv("LIVEKIT_DEFAULT_LLM", "openai:gpt-4.1-mini"),
       mcp_url=(settings.BB_MCP_SERVER_URL or ""),
       system_prompt=ASSISTANT_SYSTEM_PROMPT,
     )
