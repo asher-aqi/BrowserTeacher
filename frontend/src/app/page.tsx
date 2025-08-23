@@ -15,7 +15,9 @@ export default function Home() {
   const [token, setToken] = useState<string | null>(null);
   const [serverUrl, setServerUrl] = useState<string | null>(null);
   const [roomName, setRoomName] = useState<string>(() => crypto.randomUUID());
-  const [identity, setIdentity] = useState<string>(() => `user-${crypto.randomUUID().slice(0, 8)}`);
+  const [identity, setIdentity] = useState<string>(
+    () => `user-${crypto.randomUUID().slice(0, 8)}`
+  );
 
   const [liveViewUrl, setLiveViewUrl] = useState<string | null>(null);
 
@@ -33,7 +35,11 @@ export default function Home() {
       body: JSON.stringify({ identity, room: `lesson-${roomName}` }),
     });
     if (!res.ok) return;
-    const data = (await res.json()) as { access_token: string; room: string; ws_url: string };
+    const data = (await res.json()) as {
+      access_token: string;
+      room: string;
+      ws_url: string;
+    };
     logger.info("received token", { room: data.room });
     setToken(data.access_token);
     setServerUrl(data.ws_url);
@@ -46,7 +52,11 @@ export default function Home() {
       body: JSON.stringify({ roomId: data.room }),
     });
     if (startRes.ok) {
-      const s = (await startRes.json()) as { sessionId: string; roomId: string; liveViewUrl: string };
+      const s = (await startRes.json()) as {
+        sessionId: string;
+        roomId: string;
+        liveViewUrl: string;
+      };
       logger.info("session started", s);
       setLiveViewUrl(s.liveViewUrl);
       setSessionId(s.sessionId);
@@ -73,8 +83,13 @@ export default function Home() {
                 <LessonPlan plan={plan ?? null} />
               </div>
               <div className="p-4 border-t border-gray-200 bg-gray-50">
-                <div className="text-sm text-gray-600 mb-3 font-medium">Voice Controls</div>
-                <VoiceControlBar onStart={startVoice} isConnected={Boolean(token)} />
+                <div className="text-sm text-gray-600 mb-3 font-medium">
+                  Voice Controls
+                </div>
+                <VoiceControlBar
+                  onStart={startVoice}
+                  isConnected={Boolean(token)}
+                />
               </div>
             </div>
           }
@@ -88,13 +103,11 @@ export default function Home() {
                   className="w-full h-full"
                 />
               ) : (
-                <div className="w-full h-full grid place-items-center text-gray-500 bg-gray-50">
-                  <div className="text-center">
-                    <div className="text-4xl mb-4">🌐</div>
-                    <div className="text-lg font-medium mb-2">Browser Ready</div>
-                    <div className="text-sm">Start voice to initialize the browser session</div>
-                  </div>
-                </div>
+                <BrowserbaseIframe
+                  hideNavbar={false}
+                  allowInteraction={true}
+                  className="w-full h-full"
+                />
               )}
             </div>
           }

@@ -125,7 +125,7 @@ export default function VoiceControlBar({ onStart, isConnected }: Props) {
                     className="w-1 bg-white rounded-full transition-all duration-150 opacity-80"
                     style={{
                       height: `${Math.min(height, 20)}px`,
-                      maxHeight: '20px'
+                      maxHeight: "20px",
                     }}
                   />
                 ))}
@@ -148,7 +148,7 @@ export default function VoiceControlBar({ onStart, isConnected }: Props) {
                     className="w-1 bg-white rounded-full transition-all duration-150 opacity-80"
                     style={{
                       height: `${Math.min(height, 18)}px`,
-                      maxHeight: '18px'
+                      maxHeight: "18px",
                     }}
                   />
                 ))}
@@ -171,7 +171,7 @@ export default function VoiceControlBar({ onStart, isConnected }: Props) {
       </button>
 
       {/* Test buttons for development */}
-      {process.env.NODE_ENV === "development" && (
+      {/* {process.env.NODE_ENV === "development" && (
         <div className="flex gap-2">
           <button
             onClick={handleTestTalking}
@@ -186,7 +186,7 @@ export default function VoiceControlBar({ onStart, isConnected }: Props) {
             Animate Recording
           </button>
         </div>
-      )}
+      )} */}
     </div>
   );
 }
