@@ -1,84 +1,100 @@
-import Link from "next/link";
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { LiveKitRoom, RoomAudioRenderer } from "@livekit/components-react";
+import "@livekit/components-styles";
+import BrowserbaseIframe from "@/components/BrowserbaseIframe";
+import VoiceControlBar from "@/components/livekit/VoiceControlBar";
+import LessonPlan from "@/components/LessonPlan";
+import WindowManager from "@/components/WindowManager";
+import { logger } from "@/lib/logger";
+import { ConvexReactClient, useQuery } from "convex/react";
+import { api } from "@convex/_generated/api";
 
 export default function Home() {
+  const [token, setToken] = useState<string | null>(null);
+  const [serverUrl, setServerUrl] = useState<string | null>(null);
+  const [roomName, setRoomName] = useState<string>(() => crypto.randomUUID());
+  const [identity, setIdentity] = useState<string>(() => `user-${crypto.randomUUID().slice(0, 8)}`);
+
+  const [liveViewUrl, setLiveViewUrl] = useState<string | null>(null);
+
+  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL as string | undefined;
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  // subscribe to plan by sessionId once available
+  const plan = useQuery(api.lesson.planGet, sessionId ? { sessionId } : "skip");
+
+  const startVoice = async () => {
+    logger.info("startVoice called", { identity, roomName });
+    const base = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+    const res = await fetch(`${base}/api/v1/voice/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identity, room: `lesson-${roomName}` }),
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { access_token: string; room: string; ws_url: string };
+    logger.info("received token", { room: data.room });
+    setToken(data.access_token);
+    setServerUrl(data.ws_url);
+    setRoomName(data.room);
+
+    // Start app session (Browserbase + persistence)
+    const startRes = await fetch(`/api/session/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomId: data.room }),
+    });
+    if (startRes.ok) {
+      const s = (await startRes.json()) as { sessionId: string; roomId: string; liveViewUrl: string };
+      logger.info("session started", s);
+      setLiveViewUrl(s.liveViewUrl);
+      setSessionId(s.sessionId);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
-      <div className="container mx-auto px-4 py-16">
-        {/* Header */}
-        <header className="text-center mb-16">
-          <h1 className="text-5xl md:text-6xl font-bold text-gray-900 dark:text-white mb-6">
-            BrowserTeacher
-          </h1>
-          <p className="text-xl md:text-2xl text-gray-600 dark:text-gray-300 max-w-3xl mx-auto">
-            Master web development and browser technologies through interactive, hands-on learning experiences
-          </p>
-        </header>
+    <div className="font-sans min-h-screen">
+      <LiveKitRoom
+        token={token ?? undefined}
+        serverUrl={serverUrl ?? undefined}
+        connect={Boolean(token && serverUrl)}
+        audio={true}
+      >
+        <RoomAudioRenderer />
 
-        {/* Main Content */}
-        <main className="max-w-4xl mx-auto">
-          {/* Features Grid */}
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8 mb-16">
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg hover:shadow-xl transition-shadow">
-              <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900 rounded-lg flex items-center justify-center mb-4">
-                <svg className="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                </svg>
+        <WindowManager
+          left={
+            <div className="h-full flex flex-col">
+              <div className="p-3 border-b font-semibold">Lesson Plan</div>
+              <div className="flex-1 overflow-auto p-3">
+                <LessonPlan plan={plan ?? null} />
               </div>
-              <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Interactive Learning</h3>
-              <p className="text-gray-600 dark:text-gray-300">Learn by doing with hands-on exercises and real-time feedback</p>
-            </div>
-
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg hover:shadow-xl transition-shadow">
-              <div className="w-12 h-12 bg-green-100 dark:bg-green-900 rounded-lg flex items-center justify-center mb-4">
-                <svg className="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                </svg>
+              <div className="p-3 border-t">
+                <div className="text-xs text-gray-500">Voice</div>
               </div>
-              <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Modern Technologies</h3>
-              <p className="text-gray-600 dark:text-gray-300">Master the latest web standards, frameworks, and best practices</p>
             </div>
-
-            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg hover:shadow-xl transition-shadow">
-              <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900 rounded-lg flex items-center justify-center mb-4">
-                <svg className="w-6 h-6 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-              </div>
-              <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Fast & Efficient</h3>
-              <p className="text-gray-600 dark:text-gray-300">Optimized learning paths designed for rapid skill development</p>
+          }
+          right={
+            <div className="w-full h-screen">
+              {liveViewUrl ? (
+                <BrowserbaseIframe
+                  liveViewUrl={liveViewUrl}
+                  hideNavbar={false}
+                  allowInteraction={true}
+                  className="w-full h-full"
+                />
+              ) : (
+                <div className="w-full h-full grid place-items-center text-sm text-gray-500">
+                  Start voice to initialize the browser
+                </div>
+              )}
             </div>
-          </div>
+          }
+        />
 
-          {/* CTA Section */}
-          <div className="text-center bg-white dark:bg-gray-800 rounded-lg p-8 shadow-lg">
-            <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
-              Ready to Start Learning?
-            </h2>
-            <p className="text-gray-600 dark:text-gray-300 mb-8 max-w-2xl mx-auto">
-              Join thousands of developers who are already mastering web technologies with BrowserTeacher
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link 
-                href="/lessons" 
-                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-lg transition-colors"
-              >
-                Browse Lessons
-              </Link>
-              <Link 
-                href="/about" 
-                className="border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 font-semibold py-3 px-8 rounded-lg transition-colors"
-              >
-                Learn More
-              </Link>
-            </div>
-          </div>
-        </main>
-
-        {/* Footer */}
-        <footer className="text-center mt-16 text-gray-500 dark:text-gray-400">
-          <p>&copy; 2024 BrowserTeacher. Built with Next.js and Tailwind CSS.</p>
-        </footer>
-      </div>
+        <VoiceControlBar onStart={startVoice} isConnected={Boolean(token)} />
+      </LiveKitRoom>
     </div>
   );
 }
