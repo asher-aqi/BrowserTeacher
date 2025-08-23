@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import AsyncIterator, Iterable, Optional
 import os
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, AsyncExitStack
 
+import logging
 from pydantic_ai import Agent as PAgent
 from pydantic_ai import Tool, RunContext
 from pydantic_ai.messages import ModelMessagesTypeAdapter
@@ -98,14 +99,80 @@ class PydanticAgentLLM(LKLLM):
       Tool(lesson_step_toggle_tool),
     ]
 
+    # Track ensured Browserbase sessions by room
+    self._bb_session_ready: dict[str, bool] = {}
+
     # Construct server first, then pass via constructor (Agent.toolsets via ctor)
+    # Base prompt string + dynamic strict instructions (registered below)
+    self._base_system_prompt = system_prompt or ""
+
     if mcp_url:
       server = MCPServerStreamableHTTP(url=mcp_url, process_tool_call=self._mcp_process_tool_call)
-      self._agent = PAgent(openai_model, system_prompt=system_prompt, deps_type=Deps, tools=tools, toolsets=[server])
+      self._mcp_server = server
+      self._agent = PAgent(openai_model, system_prompt=self._base_system_prompt, deps_type=Deps, tools=tools, toolsets=[server])
       # Allow MCP sampling to use this model
       self._agent.set_mcp_sampling_model()
     else:
-      self._agent = PAgent(openai_model, system_prompt=system_prompt, deps_type=Deps, tools=tools)
+      self._mcp_server = None
+      self._agent = PAgent(openai_model, system_prompt=self._base_system_prompt, deps_type=Deps, tools=tools)
+
+    # Register dynamic system prompt to inject strict Browserbase session rules per run
+    @self._agent.system_prompt
+    async def _strict_bb_prompt(ctx: RunContext[Deps]) -> str:
+      sid = getattr(ctx.deps, "bb_session_id", "")
+      rid = getattr(ctx.deps, "room_id", "")
+      strict = (
+        "\n\nStrict Browserbase session initialization and usage:\n"
+        f"- Room: {rid}\n"
+        f"- Provided Browserbase session id: {sid}\n"
+        "- BEFORE any browsing or page interaction tools, you MUST FIRST call the tool 'browserbase_session_create' with exactly: {\"sessionId\": \"" + (sid or "") + "\"}.\n"
+        "- For ALL subsequent Browserbase tool calls, ALWAYS include this session id in arguments as both 'sessionId' and 'session_id'. If the tool accepts an object 'session', set 'session': {id: '" + (sid or "") + "'} as well.\n"
+        "- NEVER invent or change the session id. NEVER use placeholder ids like 'browserbase_session_main_*'.\n"
+        "- If the session id is missing, call 'session_get' with the room id to retrieve it BEFORE any Browserbase calls.\n"
+      )
+      return strict
+
+    # Persistent context management
+    self._entered: bool = False
+    self._exit_stack: AsyncExitStack | None = None
+
+  async def open(self, room_id: str) -> None:
+    if self._entered:
+      return
+    self._exit_stack = AsyncExitStack()
+    if self._mcp_server is not None:
+      await self._exit_stack.enter_async_context(self._mcp_server)
+    await self._exit_stack.enter_async_context(self._agent)
+    self._entered = True
+
+    # Proactively ensure Browserbase session is bound to this MCP connection
+    base = os.getenv("FRONTEND_API_BASE", "http://localhost:3000")
+    bb_session_id = ""
+    try:
+      async with httpx.AsyncClient(timeout=10.0) as client:
+        sr = await client.get(f"{base}/api/session", params={"roomId": room_id})
+        if sr.status_code == 200:
+          sj = sr.json()
+          bb_session_id = str(sj.get("bbSessionId", ""))
+    except Exception:
+      bb_session_id = ""
+    if bb_session_id and self._mcp_server is not None:
+      try:
+        await self._mcp_server.direct_call_tool("browserbase_session_create", {"sessionId": bb_session_id})
+        self._bb_session_ready[room_id] = True
+        logging.getLogger("agent").info("pre-bound Browserbase session to MCP", extra={"lk_room": room_id, "bb_session_id": bb_session_id})
+      except Exception as e:
+        logging.getLogger("agent").warning("failed to pre-bind Browserbase session", extra={"lk_room": room_id, "error": str(e)})
+
+  async def close(self) -> None:
+    if not self._entered:
+      return
+    try:
+      assert self._exit_stack is not None
+      await self._exit_stack.aclose()
+    finally:
+      self._entered = False
+      self._exit_stack = None
 
   async def _fetch_history(self, room_id: str, limit: int = 1000000) -> list:
     # Fetch Pydantic message JSON array from Next.js route
@@ -134,6 +201,13 @@ class PydanticAgentLLM(LKLLM):
             bb_session_id = str(sj.get("bbSessionId", ""))
       except Exception:
         bb_session_id = ""
+    try:
+      logging.getLogger("agent").info(
+        "resolved Browserbase session",
+        extra={"lk_room": room_id or "", "bb_session_id": bb_session_id or ""},
+      )
+    except Exception:
+      pass
     deps = self._Deps(
       room_id=room_id,
       frontend_base=base,
@@ -194,13 +268,50 @@ class PydanticAgentLLM(LKLLM):
       return
 
   async def _mcp_process_tool_call(self, ctx: RunContext[Deps], call_tool, name: str, tool_args: dict[str, Any]):
-    # Inject Browserbase session_id if missing or clearly invalid
+    # Ensure Browserbase session is created/reused before other tools, and inject session id
     try:
       sid = getattr(ctx.deps, "bb_session_id", "")
+      room = getattr(ctx.deps, "room_id", "")
+
+      async def ensure_session():
+        if not sid:
+          return
+        if self._bb_session_ready.get(room):
+          return
+        try:
+          # Reuse/create the session explicitly so subsequent tools have an active session server-side
+          await call_tool("browserbase_session_create", {"sessionId": sid}, None)
+          self._bb_session_ready[room] = True
+          logging.getLogger("agent").info("ensured Browserbase session via MCP", extra={"lk_room": room, "bb_session_id": sid})
+        except Exception as e:
+          logging.getLogger("agent").warning("failed to ensure Browserbase session", extra={"lk_room": room, "error": str(e)})
+
+      # If the current call is not the create tool, ensure session first
+      if name != "browserbase_session_create":
+        await ensure_session()
+
+      # Inject Browserbase session id on applicable calls
       if sid:
         current = str(tool_args.get("session_id", ""))
         if (not current) or current.startswith("browserbase_session_main_"):
-          tool_args = {**tool_args, "session_id": sid}
+          tool_args = {**tool_args, "session_id": sid, "sessionId": sid}
+        # Some tools may accept nested shape
+        if isinstance(tool_args.get("session"), dict):
+          inner = dict(tool_args["session"])  # copy
+          if not inner.get("id"):
+            inner["id"] = sid
+            tool_args["session"] = inner
+      try:
+        logging.getLogger("agent").info(
+          "MCP tool session injection",
+          extra={
+            "tool": name,
+            "bb_session_id": sid or "",
+            "existing_session_id": tool_args.get("session_id") or tool_args.get("sessionId") or "",
+          },
+        )
+      except Exception:
+        pass
     except Exception:
       pass
     return await call_tool(name, tool_args, None)

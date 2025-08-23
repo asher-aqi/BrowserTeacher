@@ -234,6 +234,22 @@ async def entrypoint(ctx: JobContext):
 
   await ctx.connect()
 
+  # Persist Pydantic agent and MCP connection for the duration of the room
+  try:
+    if use_pydantic and hasattr(llm_node, "open"):
+      await llm_node.open(ctx.room.name)
+  except Exception as e:
+    logger.warning(f"failed to open persistent agent context: {e}")
+
+  async def _shutdown():
+    try:
+      if use_pydantic and hasattr(llm_node, "close"):
+        await llm_node.close()
+    except Exception:
+      pass
+
+  ctx.add_shutdown_callback(_shutdown)
+
 
 if __name__ == "__main__":
   cli.run_app(

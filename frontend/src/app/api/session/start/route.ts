@@ -12,6 +12,21 @@ export async function POST(req: NextRequest) {
 
     // Create Browserbase session
     const bb = new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY! });
+
+    // Pre-clean: stop all RUNNING Browserbase sessions via SDK, requesting release
+    try {
+      const running: any[] = await (bb as any).sessions.list({ status: "RUNNING" });
+      for (const session of running) {
+        await (bb as any).sessions.update(session.id, {
+          status: "REQUEST_RELEASE",
+          projectId: session.projectId,
+        });
+        console.log("[session.start] requested release for Browserbase session", { sid: session.id });
+      }
+      console.log(`[session.start] requested release for ${running.length} sessions`);
+    } catch (e) {
+      console.warn("[session.start] stop-all (REQUEST_RELEASE) pre-clean failed", (e as any)?.message || e);
+    }
     // Types vary across SDK versions; use any to remain flexible during hackathon
     const session: any = await (bb as any).sessions.create({ projectId: process.env.BROWSERBASE_PROJECT_ID });
 
