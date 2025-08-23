@@ -2,6 +2,8 @@ import logging
 import os
 from dotenv import load_dotenv
 import httpx
+import os
+import contextlib
 
 from livekit.agents import (
   NOT_GIVEN,
@@ -30,11 +32,19 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 
-class Assistant(Agent):
-  def __init__(self) -> None:
-    super().__init__(
-      instructions=(
-        """
+# Optional Logfire instrumentation
+with contextlib.suppress(Exception):
+  if os.getenv("LOGFIRE_ENABLE", "1").lower() in ("1", "true", "yes"):
+    import logfire
+
+    logfire.configure(scrubbing=False)
+    # Instrument Pydantic AI and HTTPX for full visibility of prompts, tools, and HTTP calls
+    logfire.instrument_pydantic_ai()
+    logfire.instrument_httpx(capture_all=True)
+
+
+ASSISTANT_SYSTEM_PROMPT = (
+  """
         You are BrowserTeacher — a warm, upbeat, and expert instructor who teaches people to use software by operating a virtual browser for them. Your style is encouraging, concise, and deeply pedagogical. Follow this flow:
 
         1) Brief goal interview (1-3 questions):
@@ -53,7 +63,13 @@ class Assistant(Agent):
         - When you need to click, type, navigate, or read page state, call the MCP tools provided by the BrowserBase MCP server.
         - Use the lesson plan tools to get or upsert the plan and to toggle step completion so the frontend reflects progress in real time.
         """
-      ),
+)
+
+
+class Assistant(Agent):
+  def __init__(self) -> None:
+    super().__init__(
+      instructions=(ASSISTANT_SYSTEM_PROMPT),
     )
 
   def _frontend_base(self) -> str:
@@ -167,6 +183,7 @@ async def entrypoint(ctx: JobContext):
     llm_node = PydanticAgentLLM(
       openai_model=os.getenv("LIVEKIT_DEFAULT_LLM", "openai:gpt-4o-mini"),
       mcp_url=(settings.BB_MCP_SERVER_URL or ""),
+      system_prompt=ASSISTANT_SYSTEM_PROMPT,
     )
   else:
     llm_node = openai.LLM(model=os.getenv("LIVEKIT_DEFAULT_LLM", "gpt-4o-mini"))
