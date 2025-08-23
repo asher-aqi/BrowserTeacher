@@ -26,6 +26,7 @@ class Deps:
   room_id: str
   frontend_base: str
   bb_session_id: str
+  convex_session_id: str
 
 
 class PydanticAgentLLM(LKLLM):
@@ -50,43 +51,50 @@ class PydanticAgentLLM(LKLLM):
     async def get_room_id_tool(ctx: RunContext[Deps]) -> RoomIdOut:
       return RoomIdOut(room_id=ctx.deps.room_id)
 
-    async def session_get_tool(
-      ctx: RunContext[Deps], session_id: Optional[str] = None, room_id: Optional[str] = None
-    ) -> dict:
+    async def session_get_tool(ctx: RunContext[Deps]) -> dict:
       base = ctx.deps.frontend_base
       params: dict[str, str] = {}
-      if session_id:
-        params["sessionId"] = session_id
-      if room_id:
-        params["roomId"] = room_id
+      if ctx.deps.convex_session_id:
+        params["sessionId"] = ctx.deps.convex_session_id
+      elif ctx.deps.room_id:
+        params["roomId"] = ctx.deps.room_id
       async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(f"{base}/api/session", params=params)
         r.raise_for_status()
         return r.json()
 
-    async def lesson_plan_get_tool(ctx: RunContext[Deps], session_id: str) -> dict:
+    async def lesson_plan_get_tool(ctx: RunContext[Deps]) -> dict:
       base = ctx.deps.frontend_base
+      sid = ctx.deps.convex_session_id
       async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(f"{base}/api/lesson/plan", params={"sessionId": session_id})
+        logging.getLogger("agent").info("lesson_plan_get", extra={"convex_session_id": sid})
+        r = await client.get(f"{base}/api/lesson/plan", params={"sessionId": sid})
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        logging.getLogger("agent").info("lesson_plan_get ok", extra={"has_plan": bool(data), "title": data.get("title", "")})
+        return data
 
-    async def lesson_plan_upsert_tool(ctx: RunContext[Deps], session_id: str, plan: LessonPlan) -> dict:
+    async def lesson_plan_upsert_tool(ctx: RunContext[Deps], plan: LessonPlan) -> dict:
       base = ctx.deps.frontend_base
+      sid = ctx.deps.convex_session_id
       async with httpx.AsyncClient(timeout=10.0) as client:
+        logging.getLogger("agent").info("lesson_plan_upsert", extra={"convex_session_id": sid, "steps": len(plan.steps)})
         r = await client.post(
           f"{base}/api/lesson/plan",
-          json={"sessionId": session_id, "plan": plan.model_dump(exclude_none=True)},
+          json={"sessionId": sid, "plan": plan.model_dump(exclude_none=True)},
         )
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        logging.getLogger("agent").info("lesson_plan_upsert ok", extra={"_id": data.get("_id", "")})
+        return data
 
-    async def lesson_step_toggle_tool(ctx: RunContext[Deps], session_id: str, step_id: str, done: bool) -> dict:
+    async def lesson_step_toggle_tool(ctx: RunContext[Deps], step_id: str, done: bool) -> dict:
       base = ctx.deps.frontend_base
+      sid = ctx.deps.convex_session_id
       async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.post(
           f"{base}/api/lesson/step",
-          json={"sessionId": session_id, "stepId": step_id, "done": done},
+          json={"sessionId": sid, "stepId": step_id, "done": done},
         )
         r.raise_for_status()
         return r.json()
@@ -115,6 +123,9 @@ class PydanticAgentLLM(LKLLM):
     else:
       self._mcp_server = None
       self._agent = PAgent(openai_model, system_prompt=self._base_system_prompt, deps_type=Deps, tools=tools)
+
+    # A lightweight narration-only agent with no tools for Phase A
+    self._agent_narrate = PAgent(openai_model, system_prompt=self._base_system_prompt, deps_type=Deps, tools=[])
 
     # Register dynamic system prompt to inject strict Browserbase session rules per run
     @self._agent.system_prompt
@@ -187,7 +198,41 @@ class PydanticAgentLLM(LKLLM):
       base = os.getenv("FRONTEND_API_BASE", "http://localhost:3000")
       await client.post(f"{base}/api/messages/append_json", json={"roomId": room_id, "messagesJson": new_messages})
 
+  async def _agent_run(self, agent: PAgent, *, user_prompt: str, message_history: list, deps: Deps | None) -> tuple[str, list]:
+    if self._entered and agent is self._agent:
+      result = await agent.run(user_prompt, message_history=message_history, deps=deps)
+    else:
+      async with agent:
+        result = await agent.run(user_prompt, message_history=message_history, deps=deps)
+    return (result.output or "", to_jsonable_python(result.new_messages()))
+
+  async def _run_narration(self, room_id: str, user_prompt: str, deps: Deps | None) -> str:
+    history_json = await self._fetch_history(room_id) if room_id else []
+    history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
+    # Ask only for narration; tools are disabled by using the narration agent
+    prompt = f"Narrate briefly what you will do next based on this request: {user_prompt}. Do not call tools."
+    text, new_msgs = await self._agent_run(self._agent_narrate, user_prompt=prompt, message_history=history, deps=deps)
+    if room_id and new_msgs:
+      await self._append_history(room_id, new_msgs)
+    return text
+
+  async def _run_action(self, room_id: str, deps: Deps) -> str:
+    history_json = await self._fetch_history(room_id) if room_id else []
+    history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
+    # Perform the narrated actions now; keep result summary short
+    prompt = "Proceed to act as narrated. Do not restate the plan. Use tools to complete the step, then reply with one short sentence summary."
+    if self._entered:
+      result = await self._agent.run(prompt, message_history=history, deps=deps)
+    else:
+      async with self._agent:
+        result = await self._agent.run(prompt, message_history=history, deps=deps)
+    new_msgs = to_jsonable_python(result.new_messages())
+    if room_id and new_msgs:
+      await self._append_history(room_id, new_msgs)
+    return result.output or ""
+
   async def _run_with_history(self, room_id: str, prompt: str) -> str:
+    # Kept for compatibility if needed elsewhere; not used by chat() after two-phase mode
     history_json = await self._fetch_history(room_id) if room_id else []
     history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
     base = os.getenv("FRONTEND_API_BASE", "http://localhost:3000")
@@ -208,17 +253,21 @@ class PydanticAgentLLM(LKLLM):
       )
     except Exception:
       pass
-    deps = self._Deps(
-      room_id=room_id,
-      frontend_base=base,
-      bb_session_id=bb_session_id,
-    )
-    async with self._agent:
-      result = await self._agent.run(prompt, message_history=history, deps=deps)
-      new_msgs = to_jsonable_python(result.new_messages())
-      if room_id and new_msgs:
-        await self._append_history(room_id, new_msgs)
-      return result.output or ""
+    # Resolve convex session id once for this turn (Convex _id only)
+    convex_session_id = ""
+    try:
+      async with httpx.AsyncClient(timeout=10.0) as client:
+        sr = await client.get(f"{base}/api/session", params={"roomId": room_id})
+        if sr.status_code == 200:
+          sj = sr.json()
+          convex_session_id = str(sj.get("_id", ""))
+    except Exception:
+      convex_session_id = ""
+    deps = self._Deps(room_id=room_id, frontend_base=base, bb_session_id=bb_session_id, convex_session_id=convex_session_id)
+    text, new_msgs = await self._agent_run(self._agent, user_prompt=prompt, message_history=history, deps=deps)
+    if room_id and new_msgs:
+      await self._append_history(room_id, new_msgs)
+    return text
 
   def _extract_prompt_and_room(self, chat_ctx: Any) -> tuple[str, str]:
     prompt = ""
@@ -251,16 +300,50 @@ class PydanticAgentLLM(LKLLM):
   @asynccontextmanager
   async def chat(self, chat_ctx: Any, **kwargs):  # v1 calls chat(chat_ctx=...)
     prompt, room_id = self._extract_prompt_and_room(chat_ctx)
-    text = await self._run_with_history(room_id, prompt)
+    # Resolve deps (session ids etc.) once per turn
+    base = os.getenv("FRONTEND_API_BASE", "http://localhost:3000")
+    bb_session_id = ""
+    if room_id:
+      try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+          sr = await client.get(f"{base}/api/session", params={"roomId": room_id})
+          if sr.status_code == 200:
+            sj = sr.json()
+            bb_session_id = str(sj.get("bbSessionId", ""))
+      except Exception:
+        bb_session_id = ""
+    # Resolve convex session id (Convex _id only)
+    convex_session_id = ""
+    try:
+      async with httpx.AsyncClient(timeout=10.0) as client:
+        sr = await client.get(f"{base}/api/session", params={"roomId": room_id})
+        if sr.status_code == 200:
+          sj = sr.json()
+          convex_session_id = str(sj.get("_id", ""))
+    except Exception:
+      convex_session_id = ""
+    deps = self._Deps(room_id=room_id, frontend_base=base, bb_session_id=bb_session_id, convex_session_id=convex_session_id)
+
     add_message = getattr(chat_ctx, "add_message", None)
-    if callable(add_message) and text:
-      maybe = add_message(role="assistant", content=text)
-      if asyncio.iscoroutine(maybe):
-        await maybe
 
     async def _gen():
-      if text:
-        yield text
+      # Phase A: narrate
+      narr = await self._run_narration(room_id, prompt, deps)
+      if callable(add_message) and narr:
+        maybe = add_message(role="assistant", content=narr)
+        if asyncio.iscoroutine(maybe):
+          await maybe
+      if narr:
+        yield narr
+
+      # Phase B: act
+      act = await self._run_action(room_id, deps)
+      if callable(add_message) and act:
+        maybe = add_message(role="assistant", content=act)
+        if asyncio.iscoroutine(maybe):
+          await maybe
+      if act:
+        yield act
 
     try:
       yield _gen()

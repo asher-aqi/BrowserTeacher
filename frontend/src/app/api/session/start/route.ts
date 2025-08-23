@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
       bbDevtoolsWssUrl,
     });
 
-    return NextResponse.json({ sessionId, roomId, liveViewUrl: bbLiveViewUrl });
+    return NextResponse.json({ sessionId, roomId, liveViewUrl: bbLiveViewUrl, bbSessionId });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || "failed" }, { status: 500 });
   }

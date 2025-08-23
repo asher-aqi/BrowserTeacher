@@ -20,9 +20,25 @@ export default function Home() {
   const [liveViewUrl, setLiveViewUrl] = useState<string | null>(null);
 
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL as string | undefined;
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  // subscribe to plan by sessionId once available
+  const [sessionId, setSessionId] = useState<string | null>(null); // Convex session id
+  // Subscribe to plan by Convex session id
   const plan = useQuery(api.lesson.planGet, sessionId ? { sessionId } : "skip");
+
+  // Debug: observe session and plan updates
+  useEffect(() => {
+    logger.info("sessionId changed", { sessionId });
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    if (plan === undefined) {
+      logger.info("plan query loading or skipped", { sessionId, state: plan });
+    } else if (!plan) {
+      logger.info("plan not found for session", { sessionId });
+    } else {
+      logger.info("plan updated", { sessionId, title: (plan as any)?.title, steps: (plan as any)?.steps?.length });
+    }
+  }, [plan, sessionId]);
 
   const startVoice = async () => {
     logger.info("startVoice called", { identity, roomName });
@@ -46,7 +62,7 @@ export default function Home() {
       body: JSON.stringify({ roomId: data.room }),
     });
     if (startRes.ok) {
-      const s = (await startRes.json()) as { sessionId: string; roomId: string; liveViewUrl: string };
+      const s = (await startRes.json()) as { sessionId: string; roomId: string; liveViewUrl: string; bbSessionId?: string };
       logger.info("session started", s);
       setLiveViewUrl(s.liveViewUrl);
       setSessionId(s.sessionId);

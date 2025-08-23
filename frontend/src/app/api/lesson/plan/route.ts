@@ -9,6 +9,7 @@ export async function GET(req: NextRequest) {
   if (!sessionId) return NextResponse.json({ error: "sessionId required" }, { status: 400 });
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL as string;
   const convex = new ConvexHttpClient(convexUrl);
+  console.log("[lesson.plan GET]", { sessionId, convexUrl });
   const plan = await convex.query(api.lesson.planGet, { sessionId });
   if (!plan) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(plan);
@@ -20,6 +21,7 @@ export async function POST(req: NextRequest) {
     if (!body?.sessionId || !body?.plan) return NextResponse.json({ error: "sessionId and plan required" }, { status: 400 });
     const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL as string;
     const convex = new ConvexHttpClient(convexUrl);
+    console.log("[lesson.plan POST]", { sessionId: body.sessionId, convexUrl, title: body.plan.title, steps: body.plan.steps?.length });
     const plan = await convex.mutation(api.lesson.planUpsert, { sessionId: body.sessionId, plan: body.plan });
     return NextResponse.json(plan);
   } catch (err: any) {
