@@ -15,7 +15,9 @@ export default function Home() {
   const [token, setToken] = useState<string | null>(null);
   const [serverUrl, setServerUrl] = useState<string | null>(null);
   const [roomName, setRoomName] = useState<string>(() => crypto.randomUUID());
-  const [identity, setIdentity] = useState<string>(() => `user-${crypto.randomUUID().slice(0, 8)}`);
+  const [identity, setIdentity] = useState<string>(
+    () => `user-${crypto.randomUUID().slice(0, 8)}`
+  );
 
   const [liveViewUrl, setLiveViewUrl] = useState<string | null>(null);
 
@@ -36,7 +38,11 @@ export default function Home() {
     } else if (!plan) {
       logger.info("plan not found for session", { sessionId });
     } else {
-      logger.info("plan updated", { sessionId, title: (plan as any)?.title, steps: (plan as any)?.steps?.length });
+      logger.info("plan updated", {
+        sessionId,
+        title: (plan as any)?.title,
+        steps: (plan as any)?.steps?.length,
+      });
     }
   }, [plan, sessionId]);
 
@@ -49,7 +55,11 @@ export default function Home() {
       body: JSON.stringify({ identity, room: `lesson-${roomName}` }),
     });
     if (!res.ok) return;
-    const data = (await res.json()) as { access_token: string; room: string; ws_url: string };
+    const data = (await res.json()) as {
+      access_token: string;
+      room: string;
+      ws_url: string;
+    };
     logger.info("received token", { room: data.room });
     setToken(data.access_token);
     setServerUrl(data.ws_url);
@@ -62,7 +72,12 @@ export default function Home() {
       body: JSON.stringify({ roomId: data.room }),
     });
     if (startRes.ok) {
-      const s = (await startRes.json()) as { sessionId: string; roomId: string; liveViewUrl: string; bbSessionId?: string };
+      const s = (await startRes.json()) as {
+        sessionId: string;
+        roomId: string;
+        liveViewUrl: string;
+        bbSessionId?: string;
+      };
       logger.info("session started", s);
       setLiveViewUrl(s.liveViewUrl);
       setSessionId(s.sessionId);
@@ -81,16 +96,21 @@ export default function Home() {
 
         <WindowManager
           left={
-            <div className="h-full flex flex-col">
+            <div className="h-screen flex flex-col relative">
               <div className="p-4 border-b border-gray-200 font-semibold text-gray-900 bg-gray-50">
-                <h2 className="text-lg">Lesson Plan</h2>
+                <h2 className="text-lg">Browser Teacher</h2>
               </div>
-              <div className="flex-1 overflow-auto p-4">
+              <div
+                className="flex-1 overflow-auto p-4"
+                style={{ paddingBottom: "140px" }}
+              >
                 <LessonPlan plan={plan ?? null} />
               </div>
-              <div className="p-4 border-t border-gray-200 bg-gray-50">
-                <div className="text-sm text-gray-600 mb-3 font-medium">Voice Controls</div>
-                <VoiceControlBar onStart={startVoice} isConnected={Boolean(token)} />
+              <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200 bg-gray-50 mt-36">
+                <VoiceControlBar
+                  onStart={startVoice}
+                  isConnected={Boolean(token)}
+                />
               </div>
             </div>
           }
@@ -107,8 +127,12 @@ export default function Home() {
                 <div className="w-full h-full grid place-items-center text-gray-500 bg-gray-50">
                   <div className="text-center">
                     <div className="text-4xl mb-4">🌐</div>
-                    <div className="text-lg font-medium mb-2">Browser Ready</div>
-                    <div className="text-sm">Start voice to initialize the browser session</div>
+                    <div className="text-lg font-medium mb-2">
+                      Browser Ready
+                    </div>
+                    <div className="text-sm">
+                      Start voice to initialize the browser session
+                    </div>
                   </div>
                 </div>
               )}
