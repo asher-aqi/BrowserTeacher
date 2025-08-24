@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1
+
+########## Build stage ##########
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+
+# Build-time args for Railway to pass env
+ARG RAILWAY_ENVIRONMENT_NAME
+ENV RAILWAY_ENVIRONMENT_NAME=${RAILWAY_ENVIRONMENT_NAME}
+ARG NEXT_PUBLIC_CONVEX_URL
+ENV NEXT_PUBLIC_CONVEX_URL=${NEXT_PUBLIC_CONVEX_URL}
+ARG NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
+ARG BROWSERBASE_API_KEY
+ENV BROWSERBASE_API_KEY=${BROWSERBASE_API_KEY}
+ARG BROWSERBASE_PROJECT_ID
+ENV BROWSERBASE_PROJECT_ID=${BROWSERBASE_PROJECT_ID}
+
+RUN npm run build
+
+########## Runtime stage ##########
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+ARG RAILWAY_ENVIRONMENT_NAME
+ENV RAILWAY_ENVIRONMENT_NAME=${RAILWAY_ENVIRONMENT_NAME}
+ARG NEXT_PUBLIC_CONVEX_URL
+ENV NEXT_PUBLIC_CONVEX_URL=${NEXT_PUBLIC_CONVEX_URL}
+ARG NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
+ARG BROWSERBASE_API_KEY
+ENV BROWSERBASE_API_KEY=${BROWSERBASE_API_KEY}
+ARG BROWSERBASE_PROJECT_ID
+ENV BROWSERBASE_PROJECT_ID=${BROWSERBASE_PROJECT_ID}
+
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/public ./public
+
+EXPOSE 3000
+
+# Ensure Next.js listens on the Railway-provided port and all interfaces
+CMD ["sh", "-lc", "PORT=${PORT:-3000} HOSTNAME=0.0.0.0 npm start -- --port $PORT --hostname 0.0.0.0"]
+
+

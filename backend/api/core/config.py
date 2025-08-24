@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
+    # Railway / Frontend discovery (optional)
+    RAILWAY_PUBLIC_DOMAIN: str | None = None
+    FRONTEND_PUBLIC_DOMAIN: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env.local",
         env_file_encoding="utf-8",

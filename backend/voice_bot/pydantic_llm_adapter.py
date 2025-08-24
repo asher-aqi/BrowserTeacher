@@ -18,7 +18,7 @@ from livekit.agents.llm.llm import LLM as LKLLM
 from typing import Any
 from dataclasses import dataclass
 from livekit.agents import get_job_context
-from .schemas import LessonPlan, RoomIdOut
+from .schemas import LessonPlan, RoomIdOut, NarrationDecision
 
 
 @dataclass
@@ -140,6 +140,7 @@ class PydanticAgentLLM(LKLLM):
         "- For ALL subsequent Browserbase tool calls, ALWAYS include this session id in arguments as both 'sessionId' and 'session_id'. If the tool accepts an object 'session', set 'session': {id: '" + (sid or "") + "'} as well.\n"
         "- NEVER invent or change the session id. NEVER use placeholder ids like 'browserbase_session_main_*'.\n"
         "- If the session id is missing, call 'session_get' with the room id to retrieve it BEFORE any Browserbase calls.\n"
+        "- It is only a single session so never call multisession browser base tools"
       )
       return strict
 
@@ -206,15 +207,30 @@ class PydanticAgentLLM(LKLLM):
         result = await agent.run(user_prompt, message_history=message_history, deps=deps)
     return (result.output or "", to_jsonable_python(result.new_messages()))
 
-  async def _run_narration(self, room_id: str, user_prompt: str, deps: Deps | None) -> str:
+  async def _run_narration(self, room_id: str, user_prompt: str, deps: Deps | None) -> NarrationDecision:
     history_json = await self._fetch_history(room_id) if room_id else []
     history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
     # Ask only for narration; tools are disabled by using the narration agent
-    prompt = f"Narrate briefly what you will do next based on this request: {user_prompt}. Do not call tools."
-    text, new_msgs = await self._agent_run(self._agent_narrate, user_prompt=prompt, message_history=history, deps=deps)
+    # Return typed decision using Pydantic AI result_type, no manual JSON parsing
+    prompt = (
+      "You are the Narration phase. Decide if the agent should act now.\n"
+      "Rules:\n"
+      "- If the request is clear, safe, and you have enough context to proceed, set act=true.\n"
+      "- If clarification is needed, or it's risky/destructive, or user confirmation is needed, set act=false.\n"
+      "- The narration message should be short (<= 2 sentences), plain text for TTS, no markdown.\n"
+      "- Do not call tools.\n"
+      f"User request: {user_prompt}\n"
+      "Respond with a concise narration and the act flag."
+    )
+    if self._entered:
+      result = await self._agent_narrate.run(prompt, message_history=history, deps=deps, output_type=NarrationDecision)
+    else:
+      async with self._agent_narrate:
+        result = await self._agent_narrate.run(prompt, message_history=history, deps=deps, output_type=NarrationDecision)
+    new_msgs = to_jsonable_python(result.new_messages())
     if room_id and new_msgs:
       await self._append_history(room_id, new_msgs)
-    return text
+    return result.output or NarrationDecision(message="", act=False)
 
   async def _run_action(self, room_id: str, deps: Deps) -> str:
     history_json = await self._fetch_history(room_id) if room_id else []
@@ -327,23 +343,24 @@ class PydanticAgentLLM(LKLLM):
     add_message = getattr(chat_ctx, "add_message", None)
 
     async def _gen():
-      # Phase A: narrate
-      narr = await self._run_narration(room_id, prompt, deps)
-      if callable(add_message) and narr:
-        maybe = add_message(role="assistant", content=narr)
+      # Phase A: narrate with decision
+      decision = await self._run_narration(room_id, prompt, deps)
+      if callable(add_message) and decision.message:
+        maybe = add_message(role="assistant", content=decision.message)
         if asyncio.iscoroutine(maybe):
           await maybe
-      if narr:
-        yield narr
+      if decision.message:
+        yield decision.message
 
-      # Phase B: act
-      act = await self._run_action(room_id, deps)
-      if callable(add_message) and act:
-        maybe = add_message(role="assistant", content=act)
-        if asyncio.iscoroutine(maybe):
-          await maybe
-      if act:
-        yield act
+      # Phase B: act only if requested
+      if decision.act:
+        act = await self._run_action(room_id, deps)
+        if callable(add_message) and act:
+          maybe = add_message(role="assistant", content=act)
+          if asyncio.iscoroutine(maybe):
+            await maybe
+        if act:
+          yield act
 
     try:
       yield _gen()
